@@ -158,6 +158,7 @@ Sites use multiple CAPTCHA providers (IconCaptcha, reCAPTCHA, hCaptcha, Turnstil
 - Check if site structure changed
 - Verify credentials in `faucet_credentials.json`
 
-### Sites Unreachable
-- `tongame.io` and `bchgame.io` appear defunct/not resolving
-- Tool only works on the 6 active pick.io sites# CryptoFaucetBot
+****Resolved**
+//### Sites Unreachable
+//- `tongame.io` and `bchgame.io` appear defunct/not resolving
+//- Tool only works on the 6 active pick.io sites# CryptoFaucetBot
