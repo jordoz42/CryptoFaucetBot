@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Faucet Claimer Bot - Automated hourly claiming with session persistence.
-Run once manually to login & save cookies, then cron runs headless using saved sessions.
+Faucet Claimer Bot - Automated hourly claiming with CAPTCHA solving.
+Run with CAPTCHA solver API key for fully automated operation.
 """
 
 import asyncio
@@ -12,6 +12,13 @@ from typing import Optional
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
+# Import CAPTCHA solver
+sys.path.insert(0, str(Path(__file__).parent))
+from captcha_solver import (
+    CaptchaChallenge, CaptchaType, create_solver, detect_captcha_type,
+    inject_recaptcha_solution, inject_image_captcha_solution
+)
+
 
 class FaucetClaimer:
     def __init__(
@@ -19,11 +26,13 @@ class FaucetClaimer:
         credentials_file: str = "faucet_credentials.json",
         sessions_dir: str = "sessions",
         headless: bool = True,
+        captcha_solver: Optional[object] = None,  # CaptchaSolver instance
     ):
         self.credentials_file = Path(credentials_file)
         self.sessions_dir = Path(sessions_dir)
         self.sessions_dir.mkdir(exist_ok=True)
         self.headless = headless
+        self.captcha_solver = captcha_solver
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.accounts = self._load_accounts()
@@ -50,15 +59,15 @@ class FaucetClaimer:
     async def _close_browser(self) -> None:
         if self.browser:
             await self.browser.close()
+        if self.captcha_solver:
+            await self.captcha_solver.close()
 
     async def _save_session(self, site_name: str) -> None:
-        """Save browser context cookies to file."""
         cookies = await self.context.cookies()
         self._session_file(site_name).write_text(json.dumps(cookies, indent=2))
         print(f"  💾 Saved session for {site_name}")
 
     async def _load_session(self, site_name: str) -> bool:
-        """Load cookies from file into context."""
         session_file = self._session_file(site_name)
         if not session_file.exists():
             return False
@@ -72,7 +81,6 @@ class FaucetClaimer:
         base_url = self._get_base_url(site_name)
         login_url = f"{base_url}/login.php"
 
-        # Try loading existing session first
         await self._load_session(site_name)
         page = await self.context.new_page()
         await page.goto(base_url, wait_until="networkidle", timeout=30000)
@@ -84,15 +92,19 @@ class FaucetClaimer:
             await page.close()
             return True
 
-        # Need to login
-        print(f"  → Logging into {site_name} (manual CAPTCHA required)")
+        # Need to login - may have CAPTCHA
+        print(f"  → Logging into {site_name}")
         await page.goto(login_url, wait_until="networkidle", timeout=30000)
 
         await page.fill('input[name="username"]', account["username"])
         await page.fill('input[name="password"]', account["password"])
 
-        print(f"  ⚠ Complete CAPTCHA and click Login in the browser...")
-        await page.wait_for_load_state("networkidle", timeout=60000)
+        # Handle CAPTCHA on login if solver available
+        if self.captcha_solver:
+            await self._handle_captcha(page, "login")
+        else:
+            print(f"  ⚠ Manual CAPTCHA required - complete in browser...")
+            await page.wait_for_load_state("networkidle", timeout=60000)
 
         # Verify login
         content = await page.content()
@@ -106,15 +118,45 @@ class FaucetClaimer:
             await page.close()
             return False
 
+    async def _handle_captcha(self, page: Page, context: str) -> bool:
+        """Detect and solve CAPTCHA on current page."""
+        if not self.captcha_solver:
+            return False
+        
+        try:
+            challenge = await detect_captcha_type(page)
+            if not challenge:
+                print(f"  ℹ No CAPTCHA detected")
+                return True
+            
+            print(f"  🔍 Detected {challenge.type.value} CAPTCHA, solving...")
+            solution = await self.captcha_solver.solve(challenge)
+            print(f"  ✓ CAPTCHA solved (cost: ${solution.cost:.4f})")
+            
+            # Inject solution based on type
+            if challenge.type in (CaptchaType.RECAPTCHA_V2, CaptchaType.RECAPTCHA_V3, 
+                                   CaptchaType.HCAPTCHA, CaptchaType.TURNSTILE):
+                await inject_recaptcha_solution(page, solution.token)
+            elif challenge.type == CaptchaType.IMAGE_CAPTCHA:
+                await inject_image_captcha_solution(page, solution.token)
+            
+            # Small wait for injection to take effect
+            await asyncio.sleep(1)
+            return True
+            
+        except Exception as e:
+            print(f"  ✗ CAPTCHA solve failed: {e}")
+            return False
+
     async def claim_faucet(self, page: Page, site_name: str) -> bool:
-        """Claim the hourly faucet reward."""
+        """Claim the hourly faucet reward - handles CAPTCHA on claim."""
         base_url = self._get_base_url(site_name)
 
         try:
             print(f"  → Visiting faucet page for {site_name}")
             await page.goto(base_url, wait_until="networkidle", timeout=30000)
 
-            # Check if still logged in
+            # Check if logged in
             content = await page.content()
             if "login" in content.lower() and "logout" not in content.lower():
                 print(f"  ⚠ Session expired for {site_name}")
@@ -131,14 +173,24 @@ class FaucetClaimer:
                 '#claim-button',
                 'button:has-text("Get")',
                 'input[value="Get"]',
+                'button:has-text("FREE")',
             ]
 
             claimed = False
             for selector in claim_selectors:
                 try:
                     if await page.is_visible(selector, timeout=2000):
+                        print(f"  → Clicking claim button: {selector}")
                         await page.click(selector)
                         await page.wait_for_load_state("networkidle", timeout=10000)
+                        
+                        # Check if CAPTCHA appeared after click
+                        if self.captcha_solver:
+                            await self._handle_captcha(page, "claim")
+                            # May need to click again after CAPTCHA
+                            await page.click(selector)
+                            await page.wait_for_load_state("networkidle", timeout=10000)
+                        
                         print(f"  ✓ Claimed faucet on {site_name}")
                         claimed = True
                         break
@@ -172,7 +224,7 @@ class FaucetClaimer:
         return url_map.get(site_name, "")
 
     async def run_claim_cycle(self) -> dict:
-        """Run one claim cycle for all accounts (headless, uses saved sessions)."""
+        """Run one claim cycle for all accounts."""
         if not self.accounts:
             print("No accounts found. Run registrar first.")
             return {}
@@ -188,7 +240,7 @@ class FaucetClaimer:
                 # Load session
                 await self._load_session(site_name)
                 
-                # Try claim
+                # Try claim (will handle CAPTCHA if solver configured)
                 claimed = await self.claim_faucet(page, site_name)
                 results[site_name] = {"claimed": claimed}
                 
@@ -204,7 +256,6 @@ class FaucetClaimer:
             print("No accounts found. Run registrar first.")
             return {}
 
-        # Run non-headless for manual CAPTCHA
         self.headless = False
         await self._init_browser()
         results = {}
@@ -225,18 +276,36 @@ class FaucetClaimer:
 async def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="Auto-claim faucet rewards with session persistence")
+    parser = argparse.ArgumentParser(description="Auto-claim faucet rewards with CAPTCHA solving")
     parser.add_argument("--credentials-file", default="faucet_credentials.json")
     parser.add_argument("--sessions-dir", default="sessions")
     parser.add_argument("--headless", action="store_true", default=True)
     parser.add_argument("--setup", action="store_true", help="Interactive login to save sessions (run once)")
     parser.add_argument("--daemon", action="store_true", help="Run continuously every hour")
+    
+    # CAPTCHA solver options
+    parser.add_argument("--captcha-provider", choices=["2captcha", "anticaptcha", "capmonster"],
+                       help="CAPTCHA solving service to use")
+    parser.add_argument("--captcha-api-key", help="API key for CAPTCHA solver")
+    parser.add_argument("--captcha-env-var", default="CAPTCHA_API_KEY",
+                       help="Environment variable name for API key")
+    
     args = parser.parse_args()
+
+    # Initialize CAPTCHA solver if provider specified
+    captcha_solver = None
+    if args.captcha_provider:
+        api_key = args.captcha_api_key or os.environ.get(args.captcha_env_var)
+        if not api_key:
+            parser.error(f"CAPTCHA API key required. Use --captcha-api-key or set {args.captcha_env_var}")
+        captcha_solver = create_solver(args.captcha_provider, api_key)
+        print(f"🔐 CAPTCHA solver initialized: {args.captcha_provider}")
 
     claimer = FaucetClaimer(
         credentials_file=args.credentials_file,
         sessions_dir=args.sessions_dir,
         headless=args.headless,
+        captcha_solver=captcha_solver,
     )
 
     if args.setup:
@@ -255,4 +324,5 @@ async def main():
 
 
 if __name__ == "__main__":
+    import os
     asyncio.run(main())
