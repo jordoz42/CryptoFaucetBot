@@ -183,13 +183,5 @@ faucet_registrar/
 Sites use multiple CAPTCHA providers (IconCaptcha, reCAPTCHA, hCaptcha, Turnstile, pCaptcha).
 - Run in non-headless mode (default)
 - Complete CAPTCHA manually in each browser window
-- Consider CAPTCHA solving services for automation
-
-### Login Failures
-- Clear cookies/cache in browser context
-- Check if site structure changed
-- Verify credentials in `faucet_credentials.json`
-
-### Sites Unreachable
-- `tongame.io` and `bchgame.io` appear defunct/not resolving
-- Tool works on the 9 active pick.io sites
+- Consider CAPTCHA solving services for automation**
+** Auto Captcha solver in pipeline, commit due very soon**
