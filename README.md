@@ -52,14 +52,41 @@ This opens browser windows for each site. You'll need to:
 
 Credentials are saved to `faucet_credentials.json`.
 
-### 2. Claim Faucets (hourly)
-```bash
-# One-time claim
-python faucet_claimer.py
+### 3. Automated Hourly Claiming (Main Function)
+After registering accounts, **save login sessions once**, then cron claims automatically.
 
-# Daemon mode - runs every hour automatically
-python faucet_claimer.py --daemon
+#### 1. Initial Session Setup (run once)
+```bash
+cd /home/main/faucet_registrar
+source venv/bin/activate
+python faucet_claimer.py --setup
 ```
+Opens browser windows for each site. You:
+1. Complete CAPTCHA manually
+2. Login with saved credentials
+3. Session cookies saved to `sessions/`
+
+#### 2. Test Claim (verify sessions work)
+```bash
+python faucet_claimer.py
+```
+Runs one claim cycle headless using saved sessions.
+
+#### 3. Cron Job (automatic hourly)
+Pre-configured cron job runs hourly:
+- **Job ID**: `4fc0c2b51c80` (faucet-hourly-claimer)
+- **Schedule**: Every hour at minute 0
+- **Runs**: `claimer_cron.sh` (activates venv, runs claimer headless)
+
+Check logs:
+```bash
+cat /home/main/faucet_registrar/claimer.log
+```
+
+#### Session Management
+- Sessions stored in `sessions/` directory (one JSON per site)
+- If a session expires, re-run `--setup` for that site
+- Sessions persist across restarts
 
 ---
 
@@ -78,17 +105,17 @@ Options:
 
 ### Examples
 ```bash
-# Register on all 6 sites
-./run.sh myrefcode123
+# Register on all 9 sites
+./run.sh @my_codes.json
 
 # Register only on BNB and DOGE
-./run.sh myrefcode123 --sites bnb-pick doge-pick
+./run.sh @my_codes.json --sites bnb-pick doge-pick
 
 # Use custom email domain
-./run.sh myrefcode123 --email-domain mydomain.com
+./run.sh @my_codes.json --email-domain mydomain.com
 
 # Custom credentials file
-./run.sh myrefcode123 --credentials-file my_accounts.json
+./run.sh @my_codes.json --credentials-file my_accounts.json
 ```
 
 ---
@@ -100,8 +127,26 @@ python faucet_claimer.py [OPTIONS]
 
 Options:
   --credentials-file FILE     Accounts file (default: faucet_credentials.json)
+  --sessions-dir DIR          Sessions directory (default: sessions)
   --headless                  Run headless (default: true)
+  --setup                     Interactive login to save sessions (run once)
   --daemon                    Run continuously every hour
+```
+
+---
+
+## File Structure
+```
+faucet_registrar/
+├── faucet_registrar.py       # Registration tool
+├── faucet_claimer.py         # Automated claimer with session persistence
+├── run.sh                    # Launcher script
+├── claimer_cron.sh           # Cron wrapper script
+├── requirements.txt          # Python deps
+├── referral_codes_example.json  # Referral codes template
+├── faucet_credentials.json   # Generated accounts (gitignored)
+├── sessions/                 # Saved login sessions (gitignored)
+└── venv/                     # Virtual environment
 ```
 
 ---
@@ -121,19 +166,6 @@ Options:
 3. **Leaderboard** - Track top referrers, reward them
 4. **Bonus Pool** - Share portion of your earnings with active referrals
 5. **Tutorial Content** - Teach how to maximize faucet + game earnings
-
----
-
-## File Structure
-```
-faucet_registrar/
-├── faucet_registrar.py    # Registration tool
-├── faucet_claimer.py      # Automated claimer
-├── run.sh                 # Launcher script
-├── requirements.txt       # Python deps
-├── faucet_credentials.json  # Generated accounts (gitignored)
-└── venv/                  # Virtual environment
-```
 
 ---
 
@@ -158,7 +190,6 @@ Sites use multiple CAPTCHA providers (IconCaptcha, reCAPTCHA, hCaptcha, Turnstil
 - Check if site structure changed
 - Verify credentials in `faucet_credentials.json`
 
-****Resolved**
-//### Sites Unreachable
-//- `tongame.io` and `bchgame.io` appear defunct/not resolving
-//- Tool only works on the 6 active pick.io sites# CryptoFaucetBot
+### Sites Unreachable
+- `tongame.io` and `bchgame.io` appear defunct/not resolving
+- Tool works on the 9 active pick.io sites
